@@ -6,6 +6,7 @@ library(tidyverse)
 library (readr)
 library(reshape2)
 library(effsize)
+library(car)
 
 #-------------------------------Pré-processamento-------------------------------
 
@@ -93,22 +94,39 @@ ggplot(diabetes_clean, aes(x = insulin, fill = insulin)) +
 
 
 # 6) Perfil de medicamentos: top 5 mais prescritos
+drug_list <- c("metformin", "glipizide", "glyburide", "insulin", "pioglitazone")
+
+med_counts <- diabetes_clean %>%
+  select(all_of(drug_list)) %>%
+  pivot_longer(
+    cols      = all_of(drug_list),
+    names_to  = "drug",
+    values_to = "use"
+  ) %>%
+  filter(use != "No") %>%    
+  count(drug, name = "count") 
+
+# Plota o top 5
 ggplot(med_counts, aes(x = reorder(drug, count), y = count, fill = drug)) +
   geom_col() +
   coord_flip() +
   scale_x_discrete(labels = c(
-    "metformin" = "Metformina",
-    "glipizide" = "Glipizida",
-    "glyburide" = "Gliburida",
-    "insulin" = "Insulina",
-    "pioglitazone" = "Pioglitazona"
+    "metformin"   = "Metformina",
+    "glipizide"   = "Glipizida",
+    "glyburide"   = "Gliburida",
+    "insulin"     = "Insulina",
+    "pioglitazone"= "Pioglitazona"
   )) +
-  labs(title = "Top 5 Medicamentos Mais Usados (incluindo Insulina)", 
-       x = "Medicamento", y = "Número de Pacientes") +
+  labs(
+    title = "Top 5 Medicamentos Mais Usados (incluindo Insulina)",
+    x     = "Medicamento",
+    y     = "Número de Pacientes"
+  ) +
   theme_minimal() +
   theme(
-    legend.position = "none",
-    plot.title = element_text(hjust = 0.5))
+    legend.position     = "none",
+    plot.title          = element_text(hjust = 0.5)
+  )
 
 # 7) Uso de top 5 medicamentos por readmissão (percentual)
 # Prepara dados long format para os top 5 fármacos
@@ -196,10 +214,8 @@ ggplot(corr_df_traduzido, aes(Var1, Var2, fill = value)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 # ------------------------------- Análise de Hipóteses -------------------------------
+# ------------------------------- Análise de Hipóteses -------------------------------
 ## Hipótese 1 (Numérica): Mulheres vs Homens no Tempo de Internação
-# 1) Formulação
-#   H0: μ_F = μ_M
-#   H1: μ_F ≠ μ_M
 alpha <- 0.05
 
 # 2) Visualização das distribuições (densidade)
@@ -211,12 +227,22 @@ plt_dens <- ggplot(diabetes_clean, aes(x = time_in_hospital, fill = gender)) +
 print(plt_dens)
 
 # 3) Pressupostos
-#   a) Normalidade (Shapiro)
-sh_f <- shapiro.test(sample_f$time_in_hospital)
-sh_m <- shapiro.test(sample_m$time_in_hospital)
+#   a) Normalidade (Shapiro) — subamostrando 5.000 casos para cada gênero
+set.seed(123)  # para reprodutibilidade
+sample_f_all <- diabetes_clean %>% filter(gender == "Female") %>% pull(time_in_hospital)
+sample_m_all <- diabetes_clean %>% filter(gender == "Male")   %>% pull(time_in_hospital)
+
+sample_f <- sample(sample_f_all, 5000)
+sample_m <- sample(sample_m_all, 5000)
+
+sh_f <- shapiro.test(sample_f)
+sh_m <- shapiro.test(sample_m)
+print(sh_f)
+print(sh_m)
+
 #   b) Homogeneidade de variância (Levene)
 lev <- leveneTest(time_in_hospital ~ gender, data = diabetes_clean)
-print(sh_f); print(sh_m); print(lev)
+print(lev)
 
 # 4) Teste Estatístico (Welch t-test)
 t1 <- t.test(time_in_hospital ~ gender, data = diabetes_clean)
@@ -227,14 +253,16 @@ d_cohen <- cohen.d(time_in_hospital ~ gender, data = diabetes_clean)
 print(d_cohen)
 
 # 6) Conclusão
-cat(ifelse(t1$p.value < alpha, "Rejeita H0: diferença significativa.
-", "Falha em rejeitar H0.
-"))
+cat(ifelse(t1$p.value < alpha,
+           "Rejeita H0: diferença significativa.\n",
+           "Falha em rejeitar H0.\n"))
 
 ## Hipótese 2 (Categórica): Associação entre Gênero e Readmissão
+alpha <- 0.05
+
 # 1) Formulação
-#   H0: Gênero e Readmissão são independentes
-#   H1: Há associação entre Gênero e Readmissão
+#    H0: Gênero e Readmissão são independentes
+#    H1: Há associação entre Gênero e Readmissão
 
 # 2) Visualização (gráfico de barras percentuais)
 ggplot(diabetes_clean, aes(x = gender, fill = readmitted)) +
@@ -242,15 +270,18 @@ ggplot(diabetes_clean, aes(x = gender, fill = readmitted)) +
   scale_y_continuous(labels = scales::percent) +
   labs(
     title = "Proporção de Readmissão por Gênero",
-    x = "Gênero",
-    y = "Percentual",
-    fill = "Readmissão"
+    x     = "Gênero",
+    y     = "Percentual",
+    fill  = "Readmissão"
   ) +
   theme_minimal() +
   theme(plot.title = element_text(hjust = 0.5))
 
 # 3) Pressupostos
-#   a) Frequências esperadas >=5 (pré-verificado)
+#    a) Frequências esperadas >= 5 em cada célula da tabela de contingência
+tbl <- table(diabetes_clean$gender, diabetes_clean$readmitted)
+expected <- chisq.test(tbl, simulate.p.value = FALSE)$expected
+print(expected)  # confira se todos >= 5
 
 # 4) Teste Estatístico (Chi-squared)
 chi <- chisq.test(tbl)
@@ -258,12 +289,13 @@ print(chi)
 
 # 5) Tamanho de Efeito (Cramer's V)
 cramer_v <- sqrt(chi$statistic / (sum(tbl) * (min(dim(tbl)) - 1)))
-cat("Cramer's V =", round(cramer_v,3), "
-")
+cat("Cramer's V =", round(cramer_v, 3), "\n")
 
 # 6) Conclusão
-cat(ifelse(chi$p.value < alpha, "Rejeita H0: há associação.
-", "Falha em rejeitar H0.
-"))
+if (chi$p.value < alpha) {
+  cat("Rejeita H0: há associação entre Gênero e Readmissão.\n")
+} else {
+  cat("Falha em rejeitar H0: não há evidência de associação.\n")
+}
 
 # ------------------------------- Fim da Análise de Hipóteses -------------------------------

@@ -3,6 +3,7 @@ library(ggthemes)
 library(dplyr)
 library(stringr)
 library(tidyverse)
+library(tidyr)
 library (readr)
 library(reshape2)
 library(effsize)
@@ -162,23 +163,6 @@ ggplot(med_long, aes(x = readmitted, fill = use)) +
   ) +
   theme_minimal()
 
-
-# 8) Lab procedures vs num_medications colorido por readmissão
-ggplot(diabetes_clean, aes(x = num_lab_procedures, y = num_medications)) +
-  geom_density_2d_filled(contour_var = "ndensity") + # Cria um heatmap de densidade
-  facet_wrap(~ readmitted) +
-  labs(
-    title = "Concentração de Pacientes: Procedimentos vs. Medicações",
-    subtitle = "Separado por Status de Readmissão",
-    x = "Número de Procedimentos de Laboratório",
-    y = "Número de Medicações",
-    fill = "Densidade"
-  ) +
-  theme_minimal() +
-  theme(legend.position = "none",
-        plot.title = element_text(hjust = 0.5),
-        plot.subtitle = element_text(hjust = 0.5))
-
 # 9) Matriz de correlação binária de uso de medicamentos
 med_bin <- diabetes_clean %>%
   select(all_of(drug_list)) %>%
@@ -214,88 +198,111 @@ ggplot(corr_df_traduzido, aes(Var1, Var2, fill = value)) +
   theme(axis.text.x = element_text(angle = 45, hjust = 1))
 
 # ------------------------------- Análise de Hipóteses -------------------------------
-# ------------------------------- Análise de Hipóteses -------------------------------
-## Hipótese 1 (Numérica): Mulheres vs Homens no Tempo de Internação
+# --------------------------------------------------------------------------------
+# HIPÓTESE 1: Diferença no tempo de internação entre Mulheres e Homens
+# --------------------------------------------------------------------------------
+
+# 1) Hipóteses
+# H0: μ_female == μ_male
+# H1: μ_female != μ_male
+
 alpha <- 0.05
 
-# 2) Visualização das distribuições (densidade)
-plt_dens <- ggplot(diabetes_clean, aes(x = time_in_hospital, fill = gender)) +
-  geom_density(alpha = 0.5) +
-  labs(title = "Densidade: Tempo de Internação por Gênero", x = "Dias no Hospital") +
-  theme_minimal() +
-  theme(plot.title = element_text(hjust = 0.5))
-print(plt_dens)
+# 2) Visualização: Histograma + curva normal ajustada por gênero
+ggplot(diabetes_clean, aes(x = time_in_hospital)) +
+  geom_histogram(aes(y = ..density..), bins = 30,
+                 fill = "lightgray", color = "black") +
+  stat_function(
+    fun = dnorm,
+    args = list(
+      mean = mean(diabetes_clean %>% filter(gender == "Female") %>% pull(time_in_hospital), na.rm = TRUE),
+      sd   = sd(diabetes_clean %>% filter(gender == "Female") %>% pull(time_in_hospital), na.rm = TRUE)
+    ),
+    color = "red", size = 1,
+    inherit.aes = FALSE
+  ) +
+  stat_function(
+    fun = dnorm,
+    args = list(
+      mean = mean(diabetes_clean %>% filter(gender == "Male") %>% pull(time_in_hospital), na.rm = TRUE),
+      sd   = sd(diabetes_clean %>% filter(gender == "Male") %>% pull(time_in_hospital), na.rm = TRUE)
+    ),
+    color = "blue", size = 1,
+    inherit.aes = FALSE
+  ) +
+  facet_wrap(~ gender) +
+  labs(
+    title = "Distribuição do Tempo de Internação com Curva Normal Ajustada",
+    x = "Dias no Hospital",
+    y = "Densidade"
+  ) +
+  theme_minimal()
 
-# 3) Pressupostos
-#   a) Normalidade (Shapiro) — subamostrando 5.000 casos para cada gênero
-set.seed(123)  # para reprodutibilidade
-sample_f_all <- diabetes_clean %>% filter(gender == "Female") %>% pull(time_in_hospital)
-sample_m_all <- diabetes_clean %>% filter(gender == "Male")   %>% pull(time_in_hospital)
+# 3) Teste estatístico: Welch t-test
+t1 <- t.test(time_in_hospital ~ gender, data = diabetes_clean, var.equal = FALSE)
 
-sample_f <- sample(sample_f_all, 5000)
-sample_m <- sample(sample_m_all, 5000)
 
-sh_f <- shapiro.test(sample_f)
-sh_m <- shapiro.test(sample_m)
-print(sh_f)
-print(sh_m)
-
-#   b) Homogeneidade de variância (Levene)
-lev <- leveneTest(time_in_hospital ~ gender, data = diabetes_clean)
-print(lev)
-
-# 4) Teste Estatístico (Welch t-test)
-t1 <- t.test(time_in_hospital ~ gender, data = diabetes_clean)
+# 4) Conclusão
 print(t1)
 
-# 5) Tamanho de Efeito (Cohen's d)
-d_cohen <- cohen.d(time_in_hospital ~ gender, data = diabetes_clean)
-print(d_cohen)
-
-# 6) Conclusão
-cat(ifelse(t1$p.value < alpha,
-           "Rejeita H0: diferença significativa.\n",
-           "Falha em rejeitar H0.\n"))
-
-## Hipótese 2 (Categórica): Associação entre Gênero e Readmissão
-alpha <- 0.05
-
-# 1) Formulação
-#    H0: Gênero e Readmissão são independentes
-#    H1: Há associação entre Gênero e Readmissão
-
-# 2) Visualização (gráfico de barras percentuais)
-ggplot(diabetes_clean, aes(x = gender, fill = readmitted)) +
-  geom_bar(position = "fill") +
-  scale_y_continuous(labels = scales::percent) +
-  labs(
-    title = "Proporção de Readmissão por Gênero",
-    x     = "Gênero",
-    y     = "Percentual",
-    fill  = "Readmissão"
-  ) +
-  theme_minimal() +
-  theme(plot.title = element_text(hjust = 0.5))
-
-# 3) Pressupostos
-#    a) Frequências esperadas >= 5 em cada célula da tabela de contingência
-tbl <- table(diabetes_clean$gender, diabetes_clean$readmitted)
-expected <- chisq.test(tbl, simulate.p.value = FALSE)$expected
-print(expected)  # confira se todos >= 5
-
-# 4) Teste Estatístico (Chi-squared)
-chi <- chisq.test(tbl)
-print(chi)
-
-# 5) Tamanho de Efeito (Cramer's V)
-cramer_v <- sqrt(chi$statistic / (sum(tbl) * (min(dim(tbl)) - 1)))
-cat("Cramer's V =", round(cramer_v, 3), "\n")
-
-# 6) Conclusão
-if (chi$p.value < alpha) {
-  cat("Rejeita H0: há associação entre Gênero e Readmissão.\n")
+if (t1$p.value < alpha) {
+  message("Rejeita H0: diferença significativa entre médias (p = ",
+          signif(t1$p.value, 3), ").")
 } else {
-  cat("Falha em rejeitar H0: não há evidência de associação.\n")
+  message("Falha em rejeitar H0: não houve diferença significativa (p = ",
+          signif(t1$p.value, 3), ").")
+}
+
+# --------------------------------------------------------------------------------
+# HIPÓTESE 2: Associação entre Gênero e Readmissão
+# --------------------------------------------------------------------------------
+# 1) Hipóteses
+# H0: Gênero e Readmissão são independentes
+# H1: Existe associação entre Gênero e Readmissão
+
+# 2) Visualização: Curvas normais ajustadas por readmissão
+
+stats <- diabetes_clean %>%
+  group_by(readmitted) %>%
+  summarize(
+    mu = mean(time_in_hospital, na.rm = TRUE),
+    sigma = sd(time_in_hospital, na.rm = TRUE)
+  )
+
+x_vals <- seq(
+  from = min(diabetes_clean$time_in_hospital, na.rm = TRUE),
+  to   = max(diabetes_clean$time_in_hospital, na.rm = TRUE),
+  length.out = 500
+)
+
+curvas <- stats %>%
+  crossing(x = x_vals) %>%
+  mutate(y = dnorm(x, mean = mu, sd = sigma))
+
+ggplot() +
+  geom_density(aes(x = time_in_hospital, fill = readmitted),
+               data = diabetes_clean, alpha = 0.3) +
+  geom_line(aes(x = x, y = y, color = readmitted),
+            data = curvas, size = 1) +
+  labs(
+    title = "Tempo de Internação com Curvas Normais por Status de Readmissão",
+    x = "Dias no Hospital",
+    y = "Densidade"
+  ) +
+  theme_minimal()
+
+# 3) Teste estatístico: Qui-quadrado
+tbl <- table(diabetes_clean$gender, diabetes_clean$readmitted)
+chi <- chisq.test(tbl)
+
+
+# 4) Conclusão
+if (chi$p.value < alpha) {
+  message("Rejeita H0: há associação entre Gênero e Readmissão (p = ",
+          signif(chi$p.value, 3), ").")
+} else {
+  message("Falha em rejeitar H0: sem evidência de associação (p = ",
+          signif(chi$p.value, 3), ").")
 }
 
 # ------------------------------- Fim da Análise de Hipóteses -------------------------------
